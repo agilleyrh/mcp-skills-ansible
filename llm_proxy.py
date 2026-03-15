@@ -39,6 +39,12 @@ def fix_sse_event(data_str):
             if isinstance(part, dict) and part.get("type") == "reasoning_text":
                 return None
 
+        # Llama Stack nests error inside response object; goose expects top-level error
+        if event_type == "response.failed":
+            resp_obj = obj.get("response", {})
+            if "error" not in obj and "error" in resp_obj:
+                obj["error"] = resp_obj["error"]
+
         return json.dumps(obj)
     except (json.JSONDecodeError, TypeError):
         return data_str
