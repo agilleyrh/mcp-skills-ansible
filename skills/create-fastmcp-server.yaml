@@ -1,88 +1,146 @@
-name: create_fastmcp_server
-recipe:
-  version: 1.0.0
-  title: Create FastMCP Server from REST API
-  description: >
-    Transform an existing REST API (source code or OpenAPI spec) into a
-    FastMCP MCP server. Each REST endpoint becomes an @mcp.tool function
-    that AI agents can invoke via the Model Context Protocol.
-  instructions: |
-    You are an expert Python developer specializing in building MCP servers
-    using the FastMCP framework. Your task is to read existing REST API code
-    or an OpenAPI spec and produce a FastMCP server that wraps each endpoint
-    as an MCP tool.
+version: 1.0.0
+title: Create FastMCP Server from REST API
+description: >
+  Transform a REST API (source code, OpenAPI spec, or project hints) into a
+  FastMCP MCP server. Each REST endpoint becomes an @mcp.tool function that
+  AI agents can invoke via the Model Context Protocol.
+author:
+  contact: rrbanda
 
-    ## FastMCP API Reference (use EXACTLY this API)
+activities:
+  - "Read API source and project context (.goosehints)"
+  - "Generate FastMCP server Python file with all endpoint tools"
+  - "Generate requirements.txt"
+  - "Validate module imports"
+  - "Test against live API if cluster access is available"
+  - "Fix any issues found during validation or testing"
 
-    FastMCP uses a simple decorator pattern. Do NOT invent classes like
-    Tool, Request, Response, or methods like register_tool. The API is:
+instructions: |
+  You are an expert Python developer building MCP servers with the FastMCP
+  framework. Read the API context from .goosehints and produce a FastMCP
+  server that wraps each endpoint as an MCP tool.
 
-    ```python
-    from fastmcp import FastMCP
+  ## Available Tools (use ONLY these - NEVER invent tool names)
 
-    mcp = FastMCP("Server Name")
+  You have exactly these tools. NEVER call any other tool name:
+  - `write` — Create or overwrite a file. Requires: path, content.
+  - `edit` — Modify an existing file via find-and-replace. Requires: path, before, after.
+  - `shell` — Run a shell command. Requires: command.
+  - `tree` — List a directory tree. Requires: path.
 
-    @mcp.tool
-    def my_tool(param1: str, param2: int = 10) -> dict:
-        """Description of what this tool does. LLMs read this."""
-        return {"result": "value"}
+  NEVER call: open_file, apply_patch, read_file, create_file, save_file,
+  insert_text, replace_in_file, or any name not listed above.
+  To read a file, use `shell` with `cat <path>`.
 
-    @mcp.tool
-    async def my_async_tool(param1: str) -> list[dict]:
-        """Async tools work the same way."""
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(f"https://api.example.com/{param1}")
-            return resp.json()
+  ## FastMCP API Reference (use EXACTLY this pattern)
 
-    if __name__ == "__main__":
-        mcp.run()
-    ```
+  ```python
+  from fastmcp import FastMCP
 
-    Key rules:
-    - Decorate with @mcp.tool (no arguments needed unless renaming)
-    - Use typed parameters with defaults where sensible
-    - Return dicts or lists, not custom objects
-    - Docstrings are REQUIRED (LLMs use them to decide when to call the tool)
-    - For async HTTP calls, use httpx.AsyncClient
-    - mcp.run() defaults to stdio transport; use mcp.run(transport="http", port=8000) for HTTP
+  mcp = FastMCP("Server Name")
 
-    ## REST-to-MCP Mapping Rules
+  @mcp.tool
+  def my_tool(param1: str, param2: int = 10) -> dict:
+      """Description of what this tool does. LLMs read this docstring."""
+      return {"result": "value"}
 
-    - GET endpoint -> tool that reads/lists data
-    - POST endpoint -> tool that creates a resource
-    - DELETE endpoint -> tool that deletes a resource
-    - PATCH/PUT endpoint -> tool that updates a resource
-    - Path parameters become function parameters
-    - Query parameters become optional function parameters with defaults
-    - Request body fields become function parameters
+  @mcp.tool
+  async def my_async_tool(param1: str) -> list[dict]:
+      """Async tools work the same way."""
+      async with httpx.AsyncClient() as client:
+          resp = await client.get(f"https://api.example.com/{param1}")
+          return resp.json()
 
-    ## OpenShift / Kubernetes API Patterns
+  if __name__ == "__main__":
+      mcp.run()
+  ```
 
-    When wrapping OpenShift or Kubernetes APIs:
-    - Use bearer token auth: headers = {"Authorization": f"Bearer {token}"}
-    - Use httpx.AsyncClient(verify=False, timeout=30.0) for self-signed certs
-    - Token should be a function parameter so different users can authenticate
-    - Content-Type for PATCH must be "application/merge-patch+json"
-    - Handle HTTP errors gracefully: try/except, return error dicts
+  Key rules:
+  - Decorate with `@mcp.tool` (no arguments needed unless renaming)
+  - Use typed parameters with defaults where sensible
+  - Return dicts or lists — never custom objects
+  - Docstrings are REQUIRED (LLMs use them to decide when to call the tool)
+  - For async HTTP calls use `httpx.AsyncClient`
+  - `mcp.run()` defaults to stdio transport
 
-    ## Output Requirements
+  ## REST-to-MCP Mapping
 
-    Produce these files:
-    1. The FastMCP server Python file (e.g., devspaces_mcp.py)
-    2. requirements.txt with: fastmcp, httpx
-    3. Brief instructions on how to run the server
+  - GET   → tool that reads / lists data
+  - POST  → tool that creates a resource
+  - DELETE → tool that removes a resource
+  - PATCH / PUT → tool that updates a resource
+  - Path parameters → function parameters
+  - Query parameters → optional function parameters with defaults
+  - Request body fields → function parameters
 
-    ## Code Style
+  ## Code Style
 
-    - Group shared logic (auth headers, HTTP client) into helper functions
-    - Use async functions for all tools that make HTTP calls
-    - Include proper error handling (try/except around HTTP calls)
-    - Keep the server file self-contained (no external config files needed)
-    - Use constants for API base URLs at the top of the file
-  extensions:
-    - type: builtin
-      name: developer
-      display_name: Developer
-      timeout: 300
-      bundled: true
-isGlobal: true
+  - Group shared logic (auth headers, base URL, HTTP client) into helpers
+  - Use async functions for all tools that make HTTP calls
+  - Include proper error handling: try/except around HTTP calls, return error dicts
+  - Keep the server file self-contained (no external config files)
+  - Use constants for API base URLs at the top of the file
+  - Import `os` and `subprocess` so tokens can be auto-detected from the environment
+
+parameters:
+  - key: output_filename
+    input_type: string
+    requirement: optional
+    default: "mcp_server.py"
+    description: "Output Python filename for the generated FastMCP server"
+
+  - key: server_name
+    input_type: string
+    requirement: optional
+    default: "MCP Server"
+    description: "Display name for the FastMCP server instance"
+
+extensions:
+  - type: builtin
+    name: developer
+    display_name: Developer
+    timeout: 300
+    bundled: true
+
+prompt: |
+  Create a FastMCP MCP server from the API described in .goosehints.
+
+  Follow these steps IN ORDER. Use ONLY the tools listed in the instructions.
+
+  **Step 1 — DISCOVER**
+  Use `shell` with `cat .goosehints` to read the project context.
+  Identify: API base URL, endpoints, auth pattern, request/response shapes.
+
+  **Step 2 — GENERATE SERVER**
+  Use the `write` tool to create {{ output_filename }} containing:
+  - Imports (fastmcp, httpx, os, subprocess, asyncio, json, typing)
+  - `mcp = FastMCP("{{ server_name }}")` as the server instance
+  - Constants for the API base URL
+  - A helper to auto-detect auth tokens from the environment or `oc whoami -t`
+  - A shared async HTTP request helper with error handling
+  - One `@mcp.tool` async function per endpoint
+  - `if __name__ == "__main__": mcp.run()` entry point
+  Follow the FastMCP API Reference and REST-to-MCP Mapping from the instructions.
+
+  **Step 3 — GENERATE REQUIREMENTS**
+  Use the `write` tool to create requirements.txt with: fastmcp, httpx
+
+  **Step 4 — VALIDATE**
+  Use `shell` to run:
+    python3 -c "import {{ output_filename | replace('.py', '') }}; print('OK')"
+  If it fails, use `edit` to fix the error, then re-validate.
+
+  **Step 5 — SMOKE TEST**
+  If the project has cluster access (check with `shell`: `oc whoami`), run a
+  quick test using `shell`:
+    python3 -c "
+    import asyncio
+    from {{ output_filename | replace('.py', '') }} import list_workspaces
+    result = asyncio.run(list_workspaces('admin-devspaces'))
+    print(f'Found {len(result)} workspace(s)')
+    for ws in result: print(f'  - {ws}')
+    "
+  If this fails, use `edit` to fix the issue, then re-run the test.
+
+  **Step 6 — REPORT**
+  Summarize what was created: filename, number of tools, and test results.

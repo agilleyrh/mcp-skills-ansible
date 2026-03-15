@@ -121,6 +121,37 @@ See the devspaces-api project at https://github.com/rrbanda/devspaces-api for a
 FastAPI implementation of these endpoints. The main.py file shows the complete
 patterns for creating workspaces with IDE templates.
 
+### Token Handling
+
+- Make the `token` parameter optional (default `None`) in all tool functions
+- Auto-detect when not provided:
+  ```python
+  import subprocess, os
+  def _get_token(token: str | None = None) -> str:
+      if token:
+          return token
+      env_token = os.environ.get("OPENSHIFT_TOKEN")
+      if env_token:
+          return env_token
+      return subprocess.check_output(["oc", "whoami", "-t"], text=True).strip()
+  ```
+- This lets users call tools without passing a token every time in Dev Spaces
+
+### Response Format
+
+Return compact response dicts, NOT full Kubernetes JSON objects. Extract only:
+- `name` — metadata.name
+- `namespace` — metadata.namespace
+- `phase` — status.phase
+- `mainUrl` — status.mainUrl (IDE URL, only when Running)
+- `created` — metadata.creationTimestamp
+
+Example compact response:
+```python
+{"name": "my-ws", "namespace": "admin-devspaces", "phase": "Running",
+ "mainUrl": "https://...", "created": "2025-01-15T10:30:00Z"}
+```
+
 ### Skill Location
 
 The goose recipe for creating FastMCP servers is at: skills/create-fastmcp-server.yaml

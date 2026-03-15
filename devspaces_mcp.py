@@ -1,178 +1,162 @@
-'''devspaces_mcp.py
-FastMCP server that wraps OpenShift DevWorkspace API.
-
-Run the server:
-    python devspaces_mcp.py
-    # defaults to stdio transport; for HTTP transport use:
-    # python devspaces_mcp.py --port 8000
-'''
-
+from fastmcp import FastMCP
+import httpx
+import os
+import subprocess
 import asyncio
 import json
-from typing import Any, Dict, List, Optional
+from typing import Optional, List, Dict
 
-import httpx
-from fastmcp import FastMCP
+# FastMCP server instance
+mcp = FastMCP("DevSpaces MCP Server")
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-API_SERVER = "https://api.ocp.v7hjl.sandbox2288.opentlc.com:6443"
-DEVWORKSPACES_BASE = f"{API_SERVER}/apis/workspace.devfile.io/v1alpha2"
-DW_TEMPLATES_PATH = "devworkspacetemplates"
+# Base API URL for DevWorkspace resources
+BASE_URL = "https://api.ocp.v7hjl.sandbox2288.opentlc.com:6443/apis/workspace.devfile.io/v1alpha2"
 
-# ---------------------------------------------------------------------------
-# Helper functions
-# ---------------------------------------------------------------------------
-def _auth_headers(token: str) -> Dict[str, str]:
-    """Return the Authorization header for a bearer token."""
-    return {"Authorization": f"Bearer {token}"}
+
+def _get_token(token: Optional[str] = None) -> str:
+    """Return the OpenShift token, using the provided value, env var, or oc CLI."""
+    if token:
+        return token
+    env_token = os.environ.get("OPENSHIFT_TOKEN")
+    if env_token:
+        return env_token
+    # Fallback to oc whoami -t (may raise if oc not installed)
+    return subprocess.check_output(["oc", "whoami", "-t"], text=True).strip()
+
+
+def _compact_workspace(data: Dict) -> Dict:
+    """Extract the compact fields required for the MCP response."""
+    metadata = data.get("metadata", {})
+    status = data.get("status", {})
+    return {
+        "name": metadata.get("name"),
+        "namespace": metadata.get("namespace"),
+        "phase": status.get("phase"),
+        "mainUrl": status.get("mainUrl"),
+        "created": metadata.get("creationTimestamp"),
+    }
+
 
 async def _request(
     method: str,
     url: str,
     token: str,
-    *,
-    json_body: Optional[Dict[str, Any]] = None,
-    headers: Optional[Dict[str, str]] = None,
-    timeout: float = 30.0,
+    json_body: Optional[Dict] = None,
+    headers: Optional[Dict] = None,
+    patch: bool = False,
 ) -> httpx.Response:
-    """Make an HTTP request with proper defaults and error handling.
-
-    Args:
-        method: HTTP verb ("GET", "POST", "PATCH", "DELETE").
-        url: Full URL.
-        token: Bearer token for authentication.
-        json_body: JSON payload for POST/PATCH.
-        headers: Additional headers.
-        timeout: Seconds before the request times out.
-
-    Returns:
-        httpx.Response object. Raises a descriptive dict on failure.
-    """
-    request_headers = _auth_headers(token)
+    """Send an HTTP request to the OpenShift API with proper defaults and error handling."""
+    default_headers = {"Authorization": f"Bearer {token}"}
     if headers:
-        request_headers.update(headers)
-    async with httpx.AsyncClient(verify=False, timeout=timeout) as client:
+        default_headers.update(headers)
+    async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
         try:
-            response = await client.request(
-                method,
-                url,
-                headers=request_headers,
-                json=json_body,
-            )
-            response.raise_for_status()
-            return response
-        except httpx.HTTPStatusError as exc:
-            # Return a unified error dict for the MCP tools.
-            raise Exception(
-                json.dumps(
-                    {
-                        "error": "http_error",
-                        "status_code": exc.response.status_code,
-                        "detail": exc.response.text,
-                    }
-                )
-            )
-        except Exception as exc:
-            raise Exception(json.dumps({"error": "request_failed", "detail": str(exc)}))
+            if method == "GET":
+                resp = await client.get(url, headers=default_headers)
+            elif method == "POST":
+                resp = await client.post(url, json=json_body, headers=default_headers)
+            elif method == "DELETE":
+                resp = await client.delete(url, headers=default_headers)
+            elif method == "PATCH":
+                # For patch we need to set content-type if not supplied
+                if "Content-Type" not in default_headers:
+                    default_headers["Content-Type"] = "application/merge-patch+json"
+                resp = await client.patch(url, content=json.dumps(json_body), headers=default_headers)
+            else:
+                raise ValueError(f"Unsupported HTTP method: {method}")
+            resp.raise_for_status()
+            return resp
+        except httpx.HTTPError as exc:
+            # Wrap error in a response-like object with .text for simplicity
+            class ErrResp:
+                def __init__(self, err_msg: str):
+                    self.status_code = 0
+                    self.text = err_msg
+                def json(self):
+                    return {"error": err_msg}
+            raise exc
 
-# ---------------------------------------------------------------------------
-# FastMCP server definition
-# ---------------------------------------------------------------------------
-mcp = FastMCP("DevSpaces MCP Server")
 
-# ---------------------------------------------------------------------------
-# Tool implementations
-# ---------------------------------------------------------------------------
+# ------------------- Tool Definitions -------------------
+
 @mcp.tool
-async def list_workspaces(namespace: str, token: str) -> List[Dict[str, Any]]:
-    """List DevWorkspaces in a given namespace.
+async def list_workspaces(namespace: str, token: Optional[str] = None) -> List[Dict]:
+    """List DevWorkspaces in the given namespace.
 
-    Returns a list of workspace summary dictionaries.
+    Returns a list of compact workspace dictionaries.
     """
-    url = f"{DEVWORKSPACES_BASE}/namespaces/{namespace}/devworkspaces"
-    resp = await _request("GET", url, token)
+    token_val = _get_token(token)
+    url = f"{BASE_URL}/namespaces/{namespace}/devworkspaces"
+    resp = await _request("GET", url, token_val)
     data = resp.json()
-    return data.get("items", [])
+    items = data.get("items", [])
+    return [_compact_workspace(ws) for ws in items]
+
 
 @mcp.tool
-async def get_workspace(namespace: str, name: str, token: str) -> Dict[str, Any]:
-    """Retrieve a single DevWorkspace by name.
+async def get_workspace(namespace: str, name: str, token: Optional[str] = None) -> Dict:
+    """Retrieve a single DevWorkspace.
 
-    Returns the full workspace object (metadata, spec, status).
+    Returns a compact workspace dictionary.
     """
-    url = f"{DEVWORKSPACES_BASE}/namespaces/{namespace}/devworkspaces/{name}"
-    resp = await _request("GET", url, token)
-    return resp.json()
+    token_val = _get_token(token)
+    url = f"{BASE_URL}/namespaces/{namespace}/devworkspaces/{name}"
+    resp = await _request("GET", url, token_val)
+    return _compact_workspace(resp.json())
+
 
 @mcp.tool
-async def delete_workspace(namespace: str, name: str, token: str) -> Dict[str, Any]:
+async def delete_workspace(namespace: str, name: str, token: Optional[str] = None) -> Dict:
     """Delete a DevWorkspace.
 
-    Returns the Kubernetes delete response.
+    Returns a dict with a success flag or error information.
     """
-    url = f"{DEVWORKSPACES_BASE}/namespaces/{namespace}/devworkspaces/{name}"
-    resp = await _request("DELETE", url, token)
-    return resp.json()
+    token_val = _get_token(token)
+    url = f"{BASE_URL}/namespaces/{namespace}/devworkspaces/{name}"
+    resp = await _request("DELETE", url, token_val)
+    if resp.status_code == 200:
+        return {"deleted": True, "name": name, "namespace": namespace}
+    return {"deleted": False, "status_code": resp.status_code, "detail": resp.text}
+
 
 @mcp.tool
-async def start_workspace(namespace: str, name: str, token: str) -> Dict[str, Any]:
-    """Start (or resume) a DevWorkspace.
+async def start_workspace(namespace: str, name: str, token: Optional[str] = None) -> Dict:
+    """Start (or resume) a DevWorkspace via a PATCH request."""
+    token_val = _get_token(token)
+    url = f"{BASE_URL}/namespaces/{namespace}/devworkspaces/{name}"
+    payload = {"spec": {"started": True}}
+    resp = await _request("PATCH", url, token_val, json_body=payload)
+    return _compact_workspace(resp.json())
 
-    Sends a merge‑patch with ``{"spec": {"started": true}}``.
-    """
-    url = f"{DEVWORKSPACES_BASE}/namespaces/{namespace}/devworkspaces/{name}"
-    patch_body = {"spec": {"started": True}}
-    resp = await _request(
-        "PATCH",
-        url,
-        token,
-        json_body=patch_body,
-        headers={"Content-Type": "application/merge-patch+json"},
-    )
-    return resp.json()
 
 @mcp.tool
-async def stop_workspace(namespace: str, name: str, token: str) -> Dict[str, Any]:
-    """Stop a running DevWorkspace.
+async def stop_workspace(namespace: str, name: str, token: Optional[str] = None) -> Dict:
+    """Stop (pause) a DevWorkspace via a PATCH request."""
+    token_val = _get_token(token)
+    url = f"{BASE_URL}/namespaces/{namespace}/devworkspaces/{name}"
+    payload = {"spec": {"started": False}}
+    resp = await _request("PATCH", url, token_val, json_body=payload)
+    return _compact_workspace(resp.json())
 
-    Sends a merge‑patch with ``{"spec": {"started": false}}``.
-    """
-    url = f"{DEVWORKSPACES_BASE}/namespaces/{namespace}/devworkspaces/{name}"
-    patch_body = {"spec": {"started": False}}
-    resp = await _request(
-        "PATCH",
-        url,
-        token,
-        json_body=patch_body,
-        headers={"Content-Type": "application/merge-patch+json"},
-    )
-    return resp.json()
 
 @mcp.tool
 async def create_workspace(
     namespace: str,
     ws_name: str,
     git_repo_url: str,
-    token: str,
-) -> Dict[str, Any]:
-    """Create a DevWorkspace (IDE template + workspace).
+    token: Optional[str] = None,
+) -> Dict:
+    """Create a DevWorkspace and its associated IDE template.
 
-    The function performs two steps:
-    1. Create a ``DevWorkspaceTemplate`` named ``{ws_name}-ide``.
-    2. After a short pause, create the ``DevWorkspace`` that references the template.
-
-    Returns the created DevWorkspace object or an error dict.
+    The function first creates a DevWorkspaceTemplate, waits briefly, then creates the DevWorkspace.
+    Returns the compact representation of the created workspace.
     """
-    # -------------------------------------------------------------------
-    # 1. Create DevWorkspaceTemplate
-    # -------------------------------------------------------------------
-    template_name = f"{ws_name}-ide"
+    token_val = _get_token(token)
+    # 1️⃣ Create DevWorkspaceTemplate
     template_payload = {
         "apiVersion": "workspace.devfile.io/v1alpha2",
         "kind": "DevWorkspaceTemplate",
-        "metadata": {"name": template_name, "namespace": namespace},
+        "metadata": {"name": f"{ws_name}-ide", "namespace": namespace},
         "spec": {
             "components": [
                 {
@@ -202,17 +186,13 @@ async def create_workspace(
             ]
         },
     }
-    tmpl_url = f"{DEVWORKSPACES_BASE}/namespaces/{namespace}/{DW_TEMPLATES_PATH}"
-    await _request("POST", tmpl_url, token, json_body=template_payload)
+    tmpl_url = f"{BASE_URL}/namespaces/{namespace}/devworkspacetemplates"
+    await _request("POST", tmpl_url, token_val, json_body=template_payload)
 
-    # -------------------------------------------------------------------
-    # 2. Wait for the template to be ready (simple sleep).
-    # -------------------------------------------------------------------
+    # Small pause to allow the API to register the template
     await asyncio.sleep(2)
 
-    # -------------------------------------------------------------------
-    # 3. Create DevWorkspace referencing the template
-    # -------------------------------------------------------------------
+    # 2️⃣ Create DevWorkspace referencing the template
     workspace_payload = {
         "apiVersion": "workspace.devfile.io/v1alpha2",
         "kind": "DevWorkspace",
@@ -220,13 +200,12 @@ async def create_workspace(
         "spec": {
             "routingClass": "che",
             "started": True,
-            "contributions": [{"name": "editor", "kubernetes": {"name": template_name}}],
+            "contributions": [
+                {"name": "editor", "kubernetes": {"name": f"{ws_name}-ide"}}
+            ],
             "template": {
                 "projects": [
-                    {
-                        "name": "project",
-                        "git": {"remotes": {"origin": git_repo_url}},
-                    }
+                    {"name": "project", "git": {"remotes": {"origin": git_repo_url}}}
                 ],
                 "components": [
                     {
@@ -242,13 +221,10 @@ async def create_workspace(
             },
         },
     }
-    ws_url = f"{DEVWORKSPACES_BASE}/namespaces/{namespace}/devworkspaces"
-    resp = await _request("POST", ws_url, token, json_body=workspace_payload)
-    return resp.json()
+    ws_url = f"{BASE_URL}/namespaces/{namespace}/devworkspaces"
+    resp = await _request("POST", ws_url, token_val, json_body=workspace_payload)
+    return _compact_workspace(resp.json())
 
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
+
 if __name__ == "__main__":
-    # Default transport is stdio. For HTTP use: mcp.run(transport="http", port=8000)
     mcp.run()
