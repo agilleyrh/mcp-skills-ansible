@@ -1,10 +1,6 @@
 schemaVersion: 2.2.2
 metadata:
   name: mcp-skills-workspace
-  namespace: admin-devspaces
-attributes:
-  che-theia.eclipse.org/vscode-extensions:
-    - https://open-vsx.org/api/ms-python/python/latest
 components:
   - name: tools
     container:
@@ -31,17 +27,15 @@ commands:
   - id: install-deps
     exec:
       component: tools
-      commandLine: pip install fastmcp httpx pyyaml
+      commandLine: pip install fastmcp httpx pyyaml && echo "Dependencies installed"
       workingDir: ${PROJECT_SOURCE}
   - id: install-goose
     exec:
       component: tools
-      commandLine: curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | CONFIGURE=false bash
+      commandLine: >-
+        curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh
+        | CONFIGURE=false bash && echo "Goose installed"
       workingDir: /tmp
-events:
-  postStart:
-    - install-deps
-    - install-goose
 projects:
   - name: mcp-skills
     git:
