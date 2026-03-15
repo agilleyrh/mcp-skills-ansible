@@ -4,7 +4,7 @@ metadata:
 components:
   - name: tools
     container:
-      image: quay.io/devfile/universal-developer-image:ubi8-latest
+      image: quay.io/rbrhssa/mcp-skills:latest
       memoryLimit: 4Gi
       memoryRequest: 1Gi
       cpuLimit: "2"
@@ -24,18 +24,14 @@ components:
           targetPort: 8000
           exposure: internal
 commands:
-  - id: install-deps
-    exec:
-      component: tools
-      commandLine: pip install fastmcp httpx pyyaml && echo "Dependencies installed"
-      workingDir: ${PROJECT_SOURCE}
-  - id: install-goose
+  - id: install-goose-extension
     exec:
       component: tools
       commandLine: >-
-        curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh
-        | CONFIGURE=false bash && echo "Goose installed"
-      workingDir: /tmp
+        code --install-extension /opt/extensions/vscode-goose.vsix 2>/dev/null ||
+        /checode/checode-linux-libc/bin/remote-cli/code --install-extension /opt/extensions/vscode-goose.vsix 2>/dev/null ||
+        echo "Install the extension manually: open Extensions panel, click ... > Install from VSIX, select /opt/extensions/vscode-goose.vsix"
+      workingDir: ${PROJECT_SOURCE}
 projects:
   - name: mcp-skills
     git:
