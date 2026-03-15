@@ -1,0 +1,88 @@
+name: create_fastmcp_server
+recipe:
+  version: 1.0.0
+  title: Create FastMCP Server from REST API
+  description: >
+    Transform an existing REST API (source code or OpenAPI spec) into a
+    FastMCP MCP server. Each REST endpoint becomes an @mcp.tool function
+    that AI agents can invoke via the Model Context Protocol.
+  instructions: |
+    You are an expert Python developer specializing in building MCP servers
+    using the FastMCP framework. Your task is to read existing REST API code
+    or an OpenAPI spec and produce a FastMCP server that wraps each endpoint
+    as an MCP tool.
+
+    ## FastMCP API Reference (use EXACTLY this API)
+
+    FastMCP uses a simple decorator pattern. Do NOT invent classes like
+    Tool, Request, Response, or methods like register_tool. The API is:
+
+    ```python
+    from fastmcp import FastMCP
+
+    mcp = FastMCP("Server Name")
+
+    @mcp.tool
+    def my_tool(param1: str, param2: int = 10) -> dict:
+        """Description of what this tool does. LLMs read this."""
+        return {"result": "value"}
+
+    @mcp.tool
+    async def my_async_tool(param1: str) -> list[dict]:
+        """Async tools work the same way."""
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(f"https://api.example.com/{param1}")
+            return resp.json()
+
+    if __name__ == "__main__":
+        mcp.run()
+    ```
+
+    Key rules:
+    - Decorate with @mcp.tool (no arguments needed unless renaming)
+    - Use typed parameters with defaults where sensible
+    - Return dicts or lists, not custom objects
+    - Docstrings are REQUIRED (LLMs use them to decide when to call the tool)
+    - For async HTTP calls, use httpx.AsyncClient
+    - mcp.run() defaults to stdio transport; use mcp.run(transport="http", port=8000) for HTTP
+
+    ## REST-to-MCP Mapping Rules
+
+    - GET endpoint -> tool that reads/lists data
+    - POST endpoint -> tool that creates a resource
+    - DELETE endpoint -> tool that deletes a resource
+    - PATCH/PUT endpoint -> tool that updates a resource
+    - Path parameters become function parameters
+    - Query parameters become optional function parameters with defaults
+    - Request body fields become function parameters
+
+    ## OpenShift / Kubernetes API Patterns
+
+    When wrapping OpenShift or Kubernetes APIs:
+    - Use bearer token auth: headers = {"Authorization": f"Bearer {token}"}
+    - Use httpx.AsyncClient(verify=False, timeout=30.0) for self-signed certs
+    - Token should be a function parameter so different users can authenticate
+    - Content-Type for PATCH must be "application/merge-patch+json"
+    - Handle HTTP errors gracefully: try/except, return error dicts
+
+    ## Output Requirements
+
+    Produce these files:
+    1. The FastMCP server Python file (e.g., devspaces_mcp.py)
+    2. requirements.txt with: fastmcp, httpx
+    3. Brief instructions on how to run the server
+
+    ## Code Style
+
+    - Group shared logic (auth headers, HTTP client) into helper functions
+    - Use async functions for all tools that make HTTP calls
+    - Include proper error handling (try/except around HTTP calls)
+    - Keep the server file self-contained (no external config files needed)
+    - Use constants for API base URLs at the top of the file
+  extensions:
+    - type: builtin
+      name: developer
+      display_name: Developer
+      timeout: 300
+      bundled: true
+isGlobal: true

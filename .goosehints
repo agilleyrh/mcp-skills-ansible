@@ -1,0 +1,126 @@
+# MCP Skills Project
+
+This project uses goose agent skills to create FastMCP MCP servers.
+
+## Current Task: DevSpaces MCP Server
+
+Transform the DevSpaces REST API into a FastMCP MCP server that manages
+OpenShift Dev Spaces workspaces via the DevWorkspace Kubernetes API.
+
+### Target Cluster
+
+- API Server: https://api.ocp.v7hjl.sandbox2288.opentlc.com:6443
+- DevWorkspace API base path: /apis/workspace.devfile.io/v1alpha2
+
+### DevWorkspace API Endpoints to Wrap
+
+1. **List workspaces**: GET /apis/workspace.devfile.io/v1alpha2/namespaces/{namespace}/devworkspaces
+2. **Get workspace**: GET /apis/workspace.devfile.io/v1alpha2/namespaces/{namespace}/devworkspaces/{name}
+3. **Create workspace**: POST /apis/workspace.devfile.io/v1alpha2/namespaces/{namespace}/devworkspaces
+4. **Delete workspace**: DELETE /apis/workspace.devfile.io/v1alpha2/namespaces/{namespace}/devworkspaces/{name}
+5. **Start workspace (patch)**: PATCH with {"spec":{"started":true}}
+6. **Stop workspace (patch)**: PATCH with {"spec":{"started":false}}
+
+### Authentication
+
+All endpoints require Bearer token auth:
+```
+Authorization: Bearer <openshift-token>
+```
+
+Use httpx.AsyncClient(verify=False, timeout=30.0) because the cluster has self-signed certs.
+
+### DevWorkspace Create Payload
+
+To create a workspace, you need two resources:
+
+1. A DevWorkspaceTemplate (for the IDE):
+```json
+{
+  "apiVersion": "workspace.devfile.io/v1alpha2",
+  "kind": "DevWorkspaceTemplate",
+  "metadata": {"name": "<ws-name>-ide", "namespace": "<namespace>"},
+  "spec": {
+    "components": [{
+      "name": "che-code-runtime",
+      "container": {
+        "image": "quay.io/che-incubator/che-code:latest",
+        "memoryLimit": "2Gi",
+        "cpuLimit": "1000m",
+        "endpoints": [{
+          "name": "che-code",
+          "exposure": "public",
+          "targetPort": 3100,
+          "protocol": "https",
+          "attributes": {
+            "type": "main",
+            "cookiesAuthEnabled": true,
+            "discoverable": false,
+            "urlRewriteSupported": true
+          }
+        }],
+        "volumeMounts": [{"name": "checode", "path": "/checode"}]
+      }
+    }, {
+      "name": "checode",
+      "volume": {}
+    }]
+  }
+}
+```
+
+2. A DevWorkspace referencing the template:
+```json
+{
+  "apiVersion": "workspace.devfile.io/v1alpha2",
+  "kind": "DevWorkspace",
+  "metadata": {"name": "<ws-name>", "namespace": "<namespace>"},
+  "spec": {
+    "routingClass": "che",
+    "started": true,
+    "contributions": [{"name": "editor", "kubernetes": {"name": "<ws-name>-ide"}}],
+    "template": {
+      "projects": [{
+        "name": "project",
+        "git": {"remotes": {"origin": "<git-repo-url>"}}
+      }],
+      "components": [{
+        "name": "tools",
+        "container": {
+          "image": "quay.io/devfile/universal-developer-image:ubi8-latest",
+          "memoryLimit": "4Gi",
+          "cpuLimit": "2000m",
+          "mountSources": true
+        }
+      }]
+    }
+  }
+}
+```
+
+The DevWorkspaceTemplate must be created FIRST (POST to devworkspacetemplates endpoint),
+then wait 2 seconds, then create the DevWorkspace (POST to devworkspaces endpoint).
+
+### PATCH for start/stop
+
+Content-Type must be "application/merge-patch+json" for PATCH requests:
+- Start: {"spec": {"started": true}}
+- Stop: {"spec": {"started": false}}
+
+### Response Parsing
+
+Workspace status is at:
+- status.phase: "Starting", "Running", "Stopping", "Stopped", "Failed"
+- status.mainUrl: the IDE URL (only when Running)
+- metadata.name: workspace name
+- metadata.creationTimestamp: creation time
+
+### Reference Implementation
+
+See the devspaces-api project at https://github.com/rrbanda/devspaces-api for a
+FastAPI implementation of these endpoints. The main.py file shows the complete
+patterns for creating workspaces with IDE templates.
+
+### Skill Location
+
+The goose recipe for creating FastMCP servers is at: skills/create-fastmcp-server.yaml
