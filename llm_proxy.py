@@ -4,13 +4,17 @@ Fixes two issues:
   2. Injects sequence_number into SSE events missing it (goose requires it)
 """
 import json
+import os
 import httpx
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import StreamingResponse, JSONResponse
 from starlette.routing import Route
 
-UPSTREAM = "https://llamastack-llamastack.apps.ocp.v7hjl.sandbox2288.opentlc.com"
+UPSTREAM = os.environ.get(
+    "LLAMASTACK_URL",
+    "https://llamastack-llamastack.apps.ocp.v7hjl.sandbox2288.opentlc.com",
+)
 CLIENT = httpx.AsyncClient(verify=False, timeout=120.0)
 
 STRIP_REQUEST_FIELDS = {"max_output_tokens", "max_completion_tokens"}

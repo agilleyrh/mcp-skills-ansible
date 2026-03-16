@@ -1,0 +1,152 @@
+version: 1.0.0
+title: Deploy FastMCP Server to OpenShift
+description: >
+  Build a container image for a FastMCP MCP server, push it to the internal
+  OpenShift registry, and deploy it as a Deployment + Service + Route.
+author:
+  contact: rrbanda
+
+activities:
+  - "Read the server file and requirements"
+  - "Prepare deploy directory with HTTP transport"
+  - "Generate Dockerfile"
+  - "Build image with oc new-build / oc start-build"
+  - "Apply Deployment, Service, Route with oc apply"
+  - "Verify pod is running and report URL"
+
+instructions: |
+  You are a platform engineer deploying a FastMCP MCP server to OpenShift.
+
+  ## Available Tools (use ONLY these)
+
+  - `write` — Create or overwrite a file (path, content)
+  - `edit` — Modify an existing file (path, before, after)
+  - `shell` — Run a shell command (command)
+
+  NEVER call: open_file, apply_patch, read_file, create_file, search,
+  or any tool name not listed above.
+
+  ## Important: Complete ALL steps
+
+  You MUST complete every step below. Do NOT stop after reading files.
+  After each step, immediately proceed to the next one.
+
+parameters:
+  - key: server_file
+    input_type: string
+    requirement: required
+    description: "Python file containing the FastMCP server"
+
+  - key: namespace
+    input_type: string
+    requirement: required
+    description: "OpenShift namespace to deploy to"
+
+  - key: image_name
+    input_type: string
+    requirement: required
+    description: "Name for the container image and OpenShift resources"
+
+  - key: port
+    input_type: string
+    requirement: optional
+    default: "8000"
+    description: "Port the MCP server listens on"
+
+extensions:
+  - type: builtin
+    name: developer
+    display_name: Developer
+    timeout: 300
+    bundled: true
+
+prompt: |
+  Deploy the FastMCP server {{ server_file }} to OpenShift namespace {{ namespace }}.
+  Image name: {{ image_name }}, port: {{ port }}.
+
+  Execute ALL 7 steps below. Do not stop early.
+
+  **Step 1 — READ FILES**
+  Use `shell` to run: cat {{ server_file }}
+  Use `shell` to run: cat requirements.txt
+
+  **Step 2 — PREPARE DEPLOY DIRECTORY**
+  Use `shell` to run: mkdir -p deploy && cp {{ server_file }} deploy/ && cp requirements.txt deploy/
+  Use `edit` on deploy/{{ server_file }} to change `mcp.run()` to:
+  `mcp.run(transport="streamable-http", host="0.0.0.0", port={{ port }})`
+
+  **Step 3 — CREATE DOCKERFILE**
+  Use `write` to create deploy/Dockerfile with:
+  ```
+  FROM python:3.11-slim
+  WORKDIR /app
+  COPY requirements.txt .
+  RUN pip install --no-cache-dir -r requirements.txt
+  COPY {{ server_file }} .
+  EXPOSE {{ port }}
+  CMD ["python3", "{{ server_file }}"]
+  ```
+
+  **Step 4 — BUILD IMAGE**
+  Use `shell` to run: oc new-build --binary=true --name={{ image_name }} --strategy=docker -n {{ namespace }} 2>&1 || echo "BuildConfig already exists"
+  Use `shell` to run: oc start-build {{ image_name }} --from-dir=deploy --follow -n {{ namespace }}
+
+  **Step 5 — CREATE KUBERNETES RESOURCES**
+  Use `write` to create deploy/deployment.yaml with:
+  ```
+  apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: {{ image_name }}
+    namespace: {{ namespace }}
+  spec:
+    replicas: 1
+    selector:
+      matchLabels:
+        app: {{ image_name }}
+    template:
+      metadata:
+        labels:
+          app: {{ image_name }}
+      spec:
+        containers:
+        - name: mcp-server
+          image: image-registry.openshift-image-registry.svc:5000/{{ namespace }}/{{ image_name }}:latest
+          ports:
+          - containerPort: {{ port }}
+  ---
+  apiVersion: v1
+  kind: Service
+  metadata:
+    name: {{ image_name }}
+    namespace: {{ namespace }}
+  spec:
+    selector:
+      app: {{ image_name }}
+    ports:
+    - port: {{ port }}
+      targetPort: {{ port }}
+  ---
+  apiVersion: route.openshift.io/v1
+  kind: Route
+  metadata:
+    name: {{ image_name }}
+    namespace: {{ namespace }}
+  spec:
+    to:
+      kind: Service
+      name: {{ image_name }}
+    port:
+      targetPort: {{ port }}
+    tls:
+      termination: edge
+  ```
+  Use `shell` to run: oc apply -f deploy/deployment.yaml
+
+  **Step 6 — VERIFY**
+  Use `shell` to run: sleep 15 && oc get pods -l app={{ image_name }} -n {{ namespace }}
+  If pod is not Running, check logs: oc logs -l app={{ image_name }} -n {{ namespace }} --tail=20
+
+  **Step 7 — REPORT URL**
+  Use `shell` to run: oc get route {{ image_name }} -n {{ namespace }} -o jsonpath='{.spec.host}'
+  Report: The MCP server is deployed at https://<hostname>/mcp

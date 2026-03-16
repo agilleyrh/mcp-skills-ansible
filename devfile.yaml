@@ -21,6 +21,8 @@ components:
           value: v1/responses
         - name: OPENAI_API_KEY
           value: dummy
+        - name: LLAMASTACK_URL
+          value: https://llamastack-llamastack.apps.ocp.v7hjl.sandbox2288.opentlc.com
         - name: XDG_STATE_HOME
           value: /tmp/.local/state
       endpoints:

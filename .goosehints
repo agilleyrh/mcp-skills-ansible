@@ -9,8 +9,15 @@ OpenShift Dev Spaces workspaces via the DevWorkspace Kubernetes API.
 
 ### Target Cluster
 
-- API Server: https://api.ocp.v7hjl.sandbox2288.opentlc.com:6443
+- API Server: auto-detect at runtime with `oc whoami --show-server`
 - DevWorkspace API base path: /apis/workspace.devfile.io/v1alpha2
+
+In the generated code, build the BASE_URL dynamically:
+```python
+import subprocess
+API_SERVER = subprocess.check_output(["oc", "whoami", "--show-server"], text=True).strip()
+BASE_URL = f"{API_SERVER}/apis/workspace.devfile.io/v1alpha2"
+```
 
 ### DevWorkspace API Endpoints to Wrap
 
